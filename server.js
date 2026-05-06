@@ -105,10 +105,12 @@ async function fetchFromAPI() {
       const sizes  = [...new Set((p.variants || []).map((v) => sizeIdx  >= 0 ? v.values?.[sizeIdx]?.es  : null).filter(Boolean))]
         .sort((a, b) => { const na = parseFloat(a), nb = parseFloat(b); return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b); });
 
+      const images = (p.images || []).map(img => img.src).filter(Boolean);
       all.push({
         id:    String(p.id),
         name:  p.name?.es || p.name?.[Object.keys(p.name || {})[0]] || "Producto",
-        image: p.images?.[0]?.src || "",
+        image:  images[0] || "",
+        images: images,
         retailPrice: parseFloat(p.variants?.[0]?.price || p.price || 0),
         colors: colors.length ? colors : ["Único"],
         sizes:  sizes.length  ? sizes  : ["Único"],
@@ -130,11 +132,25 @@ async function scrapeProductDetail(url) {
   try {
     const html = await fetchPage(url);
     const $    = cheerio.load(html);
-    const result = { colors: [], sizes: [], image: "", retailPrice: 0 };
+    const result = { colors: [], sizes: [], image: "", images: [], retailPrice: 0 };
 
-    // Imagen del og:image (siempre tiene la URL real)
+    // Todas las imágenes del producto desde LS.product
+    const productMatch = html.match(/LS\.product\s*=\s*(\{[\s\S]*?\});\s*(?:LS\.|\/\/|<\/)/);
+    if (productMatch) {
+      try {
+        const pd = JSON.parse(productMatch[1]);
+        result.images = (pd.images || []).map(img => img.original_url || img.src || img.url || "").filter(Boolean);
+      } catch { /* ignorar */ }
+    }
+
+    // Fallback: og:image como primera imagen
     const ogImage = $('meta[property="og:image"]').attr("content") || "";
-    if (ogImage && !ogImage.startsWith("data:")) result.image = ogImage;
+    if (ogImage && !ogImage.startsWith("data:")) {
+      if (!result.images.length) result.images = [ogImage];
+      result.image = ogImage;
+    } else if (result.images.length) {
+      result.image = result.images[0];
+    }
 
     // Precio
     const priceContent = $("[itemprop='price']").first().attr("content");
@@ -200,6 +216,7 @@ async function scrapeAllProducts() {
         name:        item.name,
         sku:         detail.sku || "",
         image:       detail.image,
+        images:      detail.images.length ? detail.images : (detail.image ? [detail.image] : []),
         retailPrice: detail.retailPrice,
         colors:      detail.colors.length ? detail.colors : ["Único"],
         sizes:       detail.sizes.length  ? detail.sizes  : ["Único"],
