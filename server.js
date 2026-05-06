@@ -236,7 +236,8 @@ async function getProducts(forceRefresh = false) {
 }
 
 // ── RUTAS ──────────────────────────────────────────────────────────────────────
-app.get("/admin", (req, res) => res.redirect("/admin.html"));
+app.get("/admin",    (req, res) => res.redirect("/admin.html"));
+app.get("/catalogo", (req, res) => res.redirect("/catalogo.html"));
 
 app.post("/api/auth/catalog", (req, res) => {
   if (req.body.password === CATALOG_PASS) return res.json({ ok: true });
@@ -250,10 +251,27 @@ app.post("/api/auth/admin", (req, res) => {
 
 app.get("/api/products", async (req, res) => {
   try {
-    const [products, prices] = await Promise.all([
-      getProducts(),
+    const [cache, prices] = await Promise.all([
+      loadData("products_cache", CACHE_FILE, { ts: 0, data: [] }),
       loadData("prices", PRICES_FILE, {}),
     ]);
+
+    const cached   = cache.data || [];
+    const isStale  = Date.now() - (cache.ts || 0) >= CACHE_TTL_MS;
+    const isEmpty  = cached.length === 0;
+
+    // Si hay datos en caché, los devolvemos INMEDIATAMENTE (aunque estén vencidos)
+    if (!isEmpty) {
+      res.json(cached.map((p) => ({ ...p, wholesalePrice: prices[p.id] ?? null })));
+      // Si el caché está vencido, actualizamos en el fondo sin bloquear al cliente
+      if (isStale) {
+        getProducts(true).catch((e) => console.warn("Background sync failed:", e.message));
+      }
+      return;
+    }
+
+    // Solo si no hay nada en caché esperamos la sincronización (primer arranque)
+    const products = await getProducts();
     res.json(products.map((p) => ({ ...p, wholesalePrice: prices[p.id] ?? null })));
   } catch (err) {
     console.error(err);
