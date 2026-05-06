@@ -129,26 +129,22 @@
         return;
       }
 
-      // Expandir: una card por color con su imagen correspondiente
+      // Una card por color con su foto específica
       const cards = [];
       withPrice.forEach(p => {
-        const images = p.images && p.images.length ? p.images : (p.image ? [p.image] : []);
-        const colors = (p.colors || []).filter(c => c !== "Único");
-        const sizes  = (p.sizes  || []).filter(s => s !== "Único");
+        const colorImages = p.colorImages || {};
+        const colorEntries = Object.entries(colorImages); // [["Chocolate", "url"], ["Negro", "url"]]
+        const sizes = (p.sizes || []).filter(s => s !== "Único");
 
-        if (images.length <= 1 || !colors.length) {
-          // Un solo card
-          cards.push({ ...p, displayImage: images[0] || "", displayColor: colors[0] || "" });
+        if (colorEntries.length > 0) {
+          // Una card por cada color con su foto
+          colorEntries.forEach(([color, img]) => {
+            cards.push({ ...p, displayImage: img, displayColor: color, displaySizes: sizes });
+          });
         } else {
-          // Una card por imagen/color
-          const count = Math.max(images.length, colors.length);
-          for (let i = 0; i < count; i++) {
-            cards.push({
-              ...p,
-              displayImage: images[i] || images[0] || "",
-              displayColor: colors[i] || colors[0] || "",
-            });
-          }
+          // Sin colorImages: una sola card con la imagen principal
+          const colors = (p.colors || []).filter(c => c !== "Único");
+          cards.push({ ...p, displayImage: p.image || "", displayColor: colors[0] || "", displaySizes: sizes });
         }
       });
 
@@ -169,7 +165,7 @@
               ${c.displayColor ? `<div class="card-color">${c.displayColor}</div>` : ''}
               ${c.sku ? `<div class="card-sku">Art. ${c.sku}</div>` : ''}
               <div class="card-price">${fmt(c.wholesalePrice)}</div>
-              ${sizes.length ? `<div class="card-sizes">${sizes.map(s => `<span class="card-size">T.${s}</span>`).join('')}</div>` : ''}
+              ${c.displaySizes && c.displaySizes.length ? `<div class="card-sizes">${c.displaySizes.map(s => `<span class="card-size">T.${s}</span>`).join('')}</div>` : ''}
             </div>
           </div>`;
       }).join("");

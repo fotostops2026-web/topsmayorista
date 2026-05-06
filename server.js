@@ -106,11 +106,19 @@ async function fetchFromAPI() {
         .sort((a, b) => { const na = parseFloat(a), nb = parseFloat(b); return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b); });
 
       const images = (p.images || []).map(img => img.src).filter(Boolean);
+      // Mapa color → imagen desde variantes de la API
+      const colorImages = {};
+      (p.variants || []).forEach(v => {
+        const color = colorIdx >= 0 ? v.values?.[colorIdx]?.es : null;
+        const imgSrc = v.image?.src || images[0] || "";
+        if (color && imgSrc && !colorImages[color]) colorImages[color] = imgSrc;
+      });
       all.push({
         id:    String(p.id),
         name:  p.name?.es || p.name?.[Object.keys(p.name || {})[0]] || "Producto",
         image:  images[0] || "",
         images: images,
+        colorImages,
         retailPrice: parseFloat(p.variants?.[0]?.price || p.price || 0),
         colors: colors.length ? colors : ["Único"],
         sizes:  sizes.length  ? sizes  : ["Único"],
@@ -132,32 +140,38 @@ async function scrapeProductDetail(url) {
   try {
     const html = await fetchPage(url);
     const $    = cheerio.load(html);
-    const result = { colors: [], sizes: [], image: "", images: [], retailPrice: 0 };
+    const result = { colors: [], sizes: [], colorImages: {}, image: "", images: [], retailPrice: 0 };
 
-    // Todas las imágenes del producto desde LS.product
-    const productMatch = html.match(/LS\.product\s*=\s*(\{[\s\S]*?\});\s*(?:LS\.|\/\/|<\/)/);
-    if (productMatch) {
-      try {
-        const pd = JSON.parse(productMatch[1]);
-        result.images = (pd.images || []).map(img => img.original_url || img.src || img.url || "").filter(Boolean);
-      } catch { /* ignorar */ }
+    // Extraer colores, talles e imágenes por color directo de LS.variants
+    // Cada variante tiene: option0 (color), option1 (talle), image_url (foto del color)
+    const variantRegex = /"option0"\s*:\s*"([^"]+)"[^}]*?"option1"\s*:\s*"?([^",}]+)"?[^}]*?"image_url"\s*:\s*"([^"]+)"/g;
+    let match;
+    while ((match = variantRegex.exec(html)) !== null) {
+      const color    = match[1];
+      const size     = match[2];
+      const imageUrl = "https:" + match[3].replace(/\\/g, "");
+      if (color) {
+        result.colors.push(color);
+        if (!result.colorImages[color]) result.colorImages[color] = imageUrl;
+      }
+      if (size && !isNaN(parseFloat(size))) result.sizes.push(size);
     }
 
-    // Fallback: og:image como primera imagen
+    // Fallback: og:image como imagen principal
     const ogImage = $('meta[property="og:image"]').attr("content") || "";
-    if (ogImage && !ogImage.startsWith("data:")) {
-      if (!result.images.length) result.images = [ogImage];
-      result.image = ogImage;
-    } else if (result.images.length) {
-      result.image = result.images[0];
-    }
+    if (ogImage && !ogImage.startsWith("data:")) result.image = ogImage;
+
+    // Imagen principal = primera del colorImages o og:image
+    const firstColorImg = Object.values(result.colorImages)[0];
+    result.image  = firstColorImg || result.image;
+    result.images = Object.values(result.colorImages);
 
     // Precio
     const priceContent = $("[itemprop='price']").first().attr("content");
     const priceText    = $(".product-price, .js-price-display, .price").first().text().trim();
     result.retailPrice = parseFloat(priceContent) || parsePriceARS(priceText);
 
-    // Número de artículo desde LS.variants (el más confiable, es el producto actual)
+    // SKU
     let sku = "";
     const varSkuMatch = html.match(/LS\.variants\s*=\s*\[[\s\S]*?"sku"\s*:\s*"([^"]+)"/);
     if (varSkuMatch) {
@@ -165,18 +179,6 @@ async function scrapeProductDetail(url) {
       sku = raw.replace(/\/(i|v)\d+.*$/i, "").replace(/\*.*$/, "").trim();
     }
     result.sku = sku;
-
-    // Variantes desde LS.variants (Tiendanube: option0=color, option1=talle)
-    const varMatch = html.match(/LS\.variants\s*=\s*(\[[\s\S]*?\]);/);
-    if (varMatch) {
-      try {
-        const variants = JSON.parse(varMatch[1]);
-        variants.forEach((v) => {
-          if (v.option0) result.colors.push(String(v.option0));
-          if (v.option1) result.sizes.push(String(v.option1));
-        });
-      } catch { /* ignorar */ }
-    }
 
     result.colors = [...new Set(result.colors)];
     result.sizes  = [...new Set(result.sizes)].sort((a, b) => {
@@ -217,6 +219,7 @@ async function scrapeAllProducts() {
         sku:         detail.sku || "",
         image:       detail.image,
         images:      detail.images.length ? detail.images : (detail.image ? [detail.image] : []),
+        colorImages: detail.colorImages || {},
         retailPrice: detail.retailPrice,
         colors:      detail.colors.length ? detail.colors : ["Único"],
         sizes:       detail.sizes.length  ? detail.sizes  : ["Único"],
