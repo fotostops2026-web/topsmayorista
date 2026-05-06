@@ -9,10 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --orange: #e58e55; --dark: #3F3D38; --muted: #888;
-      --border: #e5e5e5; --soft: #f5f4f2;
-    }
+    :root { --orange: #e58e55; --dark: #3F3D38; --muted: #888; --border: #e5e5e5; --soft: #f5f4f2; }
     body { font-family: 'Montserrat', sans-serif; background: #fff; color: var(--dark); }
 
     /* HEADER */
@@ -37,23 +34,38 @@
 
     /* CARD */
     .card { background: #fff; display: flex; flex-direction: column; }
-    .card-img { aspect-ratio: 3/4; background: var(--soft); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    .card-img { aspect-ratio: 3/4; background: var(--soft); overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: zoom-in; position: relative; }
     .card-img img { width: 100%; height: 100%; object-fit: contain; display: block; transition: transform .4s; }
-    .card:hover .card-img img { transform: scale(1.04); }
+    .card:hover .card-img img { transform: scale(1.05); }
+    .zoom-hint { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,.35); color: #fff; font-size: .55rem; font-weight: 600; letter-spacing: 1px; padding: 3px 7px; text-transform: uppercase; opacity: 0; transition: opacity .2s; pointer-events: none; }
+    .card:hover .zoom-hint { opacity: 1; }
     .card-body { padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 5px; }
     .card-name  { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; line-height: 1.3; }
     .card-color { font-size: .68rem; color: var(--muted); font-weight: 500; }
     .card-sku   { font-size: .64rem; color: #bbb; }
     .card-price { font-size: 1rem; font-weight: 700; color: var(--orange); }
-    .card-sizes { display: flex; gap: 3px; flex-wrap: wrap; }
-    .card-size  { font-size: .6rem; padding: 2px 6px; border: 1px solid var(--border); color: var(--muted); background: var(--soft); }
 
     /* SKELETON */
     .skeleton { background: #eee; animation: pulse 1.4s ease-in-out infinite; }
-    @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
+    @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
     .sk-img  { aspect-ratio: 3/4; background: #eee; animation: pulse 1.4s ease-in-out infinite; }
     .sk-body { padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 7px; }
     .sk-line { height: 11px; border-radius: 2px; }
+
+    /* LIGHTBOX */
+    #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 9999; display: none; align-items: center; justify-content: center; padding: 20px; }
+    #lightbox.open { display: flex; }
+    #lightbox img { max-width: min(90vw, 600px); max-height: 90vh; object-fit: contain; display: block; }
+    .lb-info { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); text-align: center; color: #fff; }
+    .lb-name  { font-size: .85rem; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+    .lb-color { font-size: .75rem; color: rgba(255,255,255,.7); margin-top: 3px; }
+    .lb-price { font-size: 1rem; font-weight: 700; color: var(--orange); margin-top: 4px; }
+    .lb-close { position: absolute; top: 16px; right: 20px; background: none; border: none; color: #fff; font-size: 2rem; cursor: pointer; line-height: 1; opacity: .7; }
+    .lb-close:hover { opacity: 1; }
+    .lb-prev, .lb-next { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.12); border: none; color: #fff; font-size: 1.6rem; cursor: pointer; padding: 14px 18px; line-height: 1; transition: background .2s; }
+    .lb-prev:hover, .lb-next:hover { background: rgba(255,255,255,.25); }
+    .lb-prev { left: 12px; }
+    .lb-next { right: 12px; }
 
     footer { background: var(--soft); border-top: 1px solid var(--border); text-align: center; padding: 28px 20px; font-size: .72rem; color: var(--muted); }
 
@@ -61,6 +73,8 @@
       .grid { grid-template-columns: repeat(2, 1fr); }
       .btn-wa span { display: none; }
       .btn-wa { padding: 10px 12px; }
+      .lb-prev { left: 4px; }
+      .lb-next { right: 4px; }
     }
   </style>
 </head>
@@ -93,6 +107,19 @@
 
 <footer>Tops Calzado &nbsp;·&nbsp; Catálogo exclusivo para revendedores</footer>
 
+<!-- LIGHTBOX -->
+<div id="lightbox" onclick="lbClose(event)">
+  <button class="lb-close" onclick="closeLightbox()">×</button>
+  <button class="lb-prev" onclick="lbNav(-1);event.stopPropagation()">‹</button>
+  <img id="lb-img" src="" alt="" />
+  <button class="lb-next" onclick="lbNav(1);event.stopPropagation()">›</button>
+  <div class="lb-info">
+    <div class="lb-name"  id="lb-name"></div>
+    <div class="lb-color" id="lb-color"></div>
+    <div class="lb-price" id="lb-price"></div>
+  </div>
+</div>
+
 <script>
   const WHATSAPP = "5491133200721";
 
@@ -115,6 +142,55 @@
       </div>`).join("");
   }
 
+  // Lightbox
+  let lbCards = [], lbIdx = 0;
+
+  function openLightbox(idx) {
+    lbIdx = idx;
+    lbShow();
+    document.getElementById("lightbox").classList.add("open");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeLightbox() {
+    document.getElementById("lightbox").classList.remove("open");
+    document.body.style.overflow = "";
+  }
+
+  function lbClose(e) {
+    if (e.target === document.getElementById("lightbox")) closeLightbox();
+  }
+
+  function lbShow() {
+    const c = lbCards[lbIdx];
+    document.getElementById("lb-img").src   = c.displayImage;
+    document.getElementById("lb-name").textContent  = c.name;
+    document.getElementById("lb-color").textContent = c.displayColor || "";
+    document.getElementById("lb-price").textContent = fmt(c.wholesalePrice);
+  }
+
+  function lbNav(dir) {
+    lbIdx = (lbIdx + dir + lbCards.length) % lbCards.length;
+    lbShow();
+  }
+
+  document.addEventListener("keydown", e => {
+    const lb = document.getElementById("lightbox");
+    if (!lb.classList.contains("open")) return;
+    if (e.key === "Escape")     closeLightbox();
+    if (e.key === "ArrowRight") lbNav(1);
+    if (e.key === "ArrowLeft")  lbNav(-1);
+  });
+
+  // Swipe en mobile
+  let touchX = 0;
+  document.getElementById("lightbox").addEventListener("touchstart", e => { touchX = e.touches[0].clientX; });
+  document.getElementById("lightbox").addEventListener("touchend",   e => {
+    const dx = e.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 50) lbNav(dx < 0 ? 1 : -1);
+  });
+
+  // Cargar productos
   const grid = document.getElementById("grid");
   grid.innerHTML = skeletons(16);
 
@@ -129,46 +205,39 @@
         return;
       }
 
-      // Una card por color con su foto específica
-      const cards = [];
+      // Una card por color con su foto
+      lbCards = [];
       withPrice.forEach(p => {
-        const colorImages = p.colorImages || {};
-        const colorEntries = Object.entries(colorImages); // [["Chocolate", "url"], ["Negro", "url"]]
-        const sizes = (p.sizes || []).filter(s => s !== "Único");
+        const colorImages  = p.colorImages || {};
+        const colorEntries = Object.entries(colorImages);
 
         if (colorEntries.length > 0) {
-          // Una card por cada color con su foto
           colorEntries.forEach(([color, img]) => {
-            cards.push({ ...p, displayImage: img, displayColor: color, displaySizes: sizes });
+            lbCards.push({ ...p, displayImage: img, displayColor: color });
           });
         } else {
-          // Sin colorImages: una sola card con la imagen principal
           const colors = (p.colors || []).filter(c => c !== "Único");
-          cards.push({ ...p, displayImage: p.image || "", displayColor: colors[0] || "", displaySizes: sizes });
+          lbCards.push({ ...p, displayImage: p.image || "", displayColor: colors[0] || "" });
         }
       });
 
       document.getElementById("section-title").textContent =
-        `${cards.length} artículo${cards.length !== 1 ? "s" : ""} disponible${cards.length !== 1 ? "s" : ""}`;
+        `${lbCards.length} artículo${lbCards.length !== 1 ? "s" : ""} disponible${lbCards.length !== 1 ? "s" : ""}`;
 
-      grid.innerHTML = cards.map(c => {
-        const sizes = (c.sizes || []).filter(s => s !== "Único").slice(0, 10);
-        return `
-          <div class="card">
-            <div class="card-img">
-              <img src="${c.displayImage}" alt="${c.name}"
-                   loading="lazy"
-                   onerror="this.parentElement.style.background='#eee';this.style.display='none'" />
-            </div>
-            <div class="card-body">
-              <div class="card-name">${c.name}</div>
-              ${c.displayColor ? `<div class="card-color">${c.displayColor}</div>` : ''}
-              ${c.sku ? `<div class="card-sku">Art. ${c.sku}</div>` : ''}
-              <div class="card-price">${fmt(c.wholesalePrice)}</div>
-              ${c.displaySizes && c.displaySizes.length ? `<div class="card-sizes">${c.displaySizes.map(s => `<span class="card-size">T.${s}</span>`).join('')}</div>` : ''}
-            </div>
-          </div>`;
-      }).join("");
+      grid.innerHTML = lbCards.map((c, i) => `
+        <div class="card">
+          <div class="card-img" onclick="openLightbox(${i})">
+            <img src="${c.displayImage}" alt="${c.name}" loading="lazy"
+                 onerror="this.parentElement.style.background='#eee';this.style.display='none'" />
+            <span class="zoom-hint">Ver</span>
+          </div>
+          <div class="card-body">
+            <div class="card-name">${c.name}</div>
+            ${c.displayColor ? `<div class="card-color">${c.displayColor}</div>` : ''}
+            ${c.sku ? `<div class="card-sku">Art. ${c.sku}</div>` : ''}
+            <div class="card-price">${fmt(c.wholesalePrice)}</div>
+          </div>
+        </div>`).join("");
     })
     .catch(() => {
       grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:60px;color:#c0392b;font-size:.8rem">Error al cargar. Recargá la página.</div>`;
