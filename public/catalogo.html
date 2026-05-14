@@ -35,6 +35,7 @@
     /* CARD */
     .card { background: #fff; display: flex; flex-direction: column; }
     .card-img { aspect-ratio: 3/4; background: var(--soft); overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: zoom-in; position: relative; }
+    .card-img.no-price { cursor: default; }
     .card-img img { width: 100%; height: 100%; object-fit: contain; display: block; transition: transform .4s; }
     .card:hover .card-img img { transform: scale(1.05); }
     .zoom-hint { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,.35); color: #fff; font-size: .55rem; font-weight: 600; letter-spacing: 1px; padding: 3px 7px; text-transform: uppercase; opacity: 0; transition: opacity .2s; pointer-events: none; }
@@ -44,6 +45,7 @@
     .card-color { font-size: .68rem; color: var(--muted); font-weight: 500; }
     .card-sku   { font-size: .64rem; color: #bbb; }
     .card-price { font-size: 1rem; font-weight: 700; color: var(--orange); }
+    .card-no-price { font-size: .72rem; color: #bbb; font-style: italic; }
 
     /* SKELETON */
     .skeleton { background: #eee; animation: pulse 1.4s ease-in-out infinite; }
@@ -146,6 +148,8 @@
   let lbCards = [], lbIdx = 0;
 
   function openLightbox(idx) {
+    const card = lbCards[idx];
+    if (!card || !card.wholesalePrice) return;
     lbIdx = idx;
     lbShow();
     document.getElementById("lightbox").classList.add("open");
@@ -170,8 +174,13 @@
   }
 
   function lbNav(dir) {
-    lbIdx = (lbIdx + dir + lbCards.length) % lbCards.length;
-    lbShow();
+    let next = (lbIdx + dir + lbCards.length) % lbCards.length;
+    let tries = 0;
+    while (!lbCards[next]?.wholesalePrice && tries < lbCards.length) {
+      next = (next + dir + lbCards.length) % lbCards.length;
+      tries++;
+    }
+    if (lbCards[next]?.wholesalePrice) { lbIdx = next; lbShow(); }
   }
 
   document.addEventListener("keydown", e => {
@@ -197,9 +206,7 @@
   fetch("/api/products")
     .then(r => r.json())
     .then(products => {
-      const withPrice = products.filter(p => p.wholesalePrice);
-
-      if (!withPrice.length) {
+      if (!products.length) {
         document.getElementById("section-title").textContent = "Próximamente";
         grid.innerHTML = "";
         return;
@@ -207,7 +214,7 @@
 
       // Una card por color con su foto
       lbCards = [];
-      withPrice.forEach(p => {
+      products.forEach(p => {
         const colorImages  = p.colorImages || {};
         const colorEntries = Object.entries(colorImages);
 
@@ -221,23 +228,30 @@
         }
       });
 
+      const withPrice = lbCards.filter(c => c.wholesalePrice).length;
       document.getElementById("section-title").textContent =
         `${lbCards.length} artículo${lbCards.length !== 1 ? "s" : ""} disponible${lbCards.length !== 1 ? "s" : ""}`;
 
-      grid.innerHTML = lbCards.map((c, i) => `
+      grid.innerHTML = lbCards.map((c, i) => {
+        const hasPrice = c.wholesalePrice && c.wholesalePrice > 0;
+        return `
         <div class="card">
-          <div class="card-img" onclick="openLightbox(${i})">
+          <div class="card-img${hasPrice ? '' : ' no-price'}" ${hasPrice ? `onclick="openLightbox(${i})"` : ''}>
             <img src="${c.displayImage}" alt="${c.name}" loading="lazy"
                  onerror="this.parentElement.style.background='#eee';this.style.display='none'" />
-            <span class="zoom-hint">Ver</span>
+            ${hasPrice ? '<span class="zoom-hint">Ver</span>' : ''}
           </div>
           <div class="card-body">
             <div class="card-name">${c.name}</div>
             ${c.displayColor ? `<div class="card-color">${c.displayColor}</div>` : ''}
             ${c.sku ? `<div class="card-sku">Art. ${c.sku}</div>` : ''}
-            <div class="card-price">${fmt(c.wholesalePrice)}</div>
+            ${hasPrice
+              ? `<div class="card-price">${fmt(c.wholesalePrice)}</div>`
+              : `<div class="card-no-price">Consultar precio</div>`
+            }
           </div>
-        </div>`).join("");
+        </div>`;
+      }).join("");
     })
     .catch(() => {
       grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:60px;color:#c0392b;font-size:.8rem">Error al cargar. Recargá la página.</div>`;
