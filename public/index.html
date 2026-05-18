@@ -15,16 +15,6 @@
     }
     body { font-family: 'Montserrat', sans-serif; background: var(--bg, #fff); color: var(--dark); }
 
-    /* LOCK */
-    #lock { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 9999; }
-    #lock-box { background: #fff; padding: 44px 36px; width: 340px; text-align: center; }
-    .lock-logo { font-size: 1.5rem; font-weight: 700; letter-spacing: 5px; text-transform: uppercase; margin-bottom: 4px; }
-    .lock-sub  { font-size: .72rem; color: var(--orange); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 28px; }
-    #lock input { width: 100%; padding: 12px 14px; border: 1px solid var(--border); font-family: 'Montserrat', sans-serif; font-size: .9rem; outline: none; margin-bottom: 12px; transition: border-color .2s; }
-    #lock input:focus { border-color: var(--dark); }
-    #lock .btn-enter { width: 100%; padding: 13px; background: var(--black); color: #fff; border: none; font-family: 'Montserrat', sans-serif; font-size: .8rem; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; cursor: pointer; }
-    #lock .btn-enter:hover { background: #222; }
-    #lock-error { color: #c0392b; font-size: .78rem; margin-top: 10px; display: none; }
 
     /* MODAL */
     #modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 999; padding: 16px; }
@@ -188,16 +178,6 @@
 </head>
 <body>
 
-<!-- LOCK -->
-<div id="lock">
-  <div id="lock-box">
-    <div class="lock-logo">Tops</div>
-    <div class="lock-sub">Catálogo Mayorista</div>
-    <input type="password" id="pwd" placeholder="Contraseña" />
-    <button class="btn-enter" onclick="login()">Ingresar</button>
-    <div id="lock-error">Contraseña incorrecta.</div>
-  </div>
-</div>
 
 <!-- MODAL GRILLA -->
 <div id="modal-overlay" onclick="closeModalOutside(event)">
@@ -356,23 +336,7 @@
   let cart     = [];
   let activeP  = null;
 
-  // ── LOGIN ──
-  function login() {
-    const pwd = document.getElementById("pwd").value;
-    fetch("/api/auth/catalog", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: pwd }),
-    }).then(r => {
-      if (r.ok) {
-        document.getElementById("lock").style.display = "none";
-        loadAll();
-      } else {
-        document.getElementById("lock-error").style.display = "block";
-      }
-    });
-  }
-  document.getElementById("pwd").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+  loadAll();
 
   // ── CARGAR TODO ──
   async function loadAll() {
