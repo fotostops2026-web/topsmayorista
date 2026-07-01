@@ -192,8 +192,9 @@ async function scrapeProductDetail(url) {
 
 async function scrapeAllProducts() {
   const products = [];
+  const seenIds  = new Set();
   let page = 1;
-  while (page <= 10) {
+  while (page <= 30) {
     const url  = `${STORE_URL}/productos/?page=${page}`;
     const html = await fetchPage(url);
     const $    = cheerio.load(html);
@@ -210,7 +211,13 @@ async function scrapeAllProducts() {
 
     if (items.length === 0) break;
 
-    for (const item of items) {
+    // Si ningún producto de esta página es nuevo, la tienda ignoró el ?page= y
+    // estamos viendo la página 1 otra vez: dejamos de pedir páginas.
+    const newItems = items.filter((item) => !seenIds.has(item.id));
+    if (newItems.length === 0) break;
+
+    for (const item of newItems) {
+      seenIds.add(item.id);
       const detail = await scrapeProductDetail(item.href);
       products.push({
         id:          item.id,
@@ -225,8 +232,6 @@ async function scrapeAllProducts() {
       });
     }
 
-    const hasNext = $(".next, .pagination-next, [rel='next']").length > 0;
-    if (!hasNext) break;
     page++;
   }
   return products;
