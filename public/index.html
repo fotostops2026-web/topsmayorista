@@ -94,6 +94,9 @@
     /* PRODUCT GRID */
     .section { max-width: 1280px; margin: 0 auto; padding: 48px 24px; }
     .section-title { font-size: .7rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: var(--muted); margin-bottom: 28px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+    .search-wrap { margin-bottom: 20px; }
+    .search-input { width: 100%; max-width: 360px; padding: 12px 16px; border: 1px solid var(--border); font-family: 'Montserrat', sans-serif; font-size: .85rem; outline: none; transition: border-color .2s; }
+    .search-input:focus { border-color: var(--orange); }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
 
     .card { background: #fff; border: 1px solid var(--border); }
@@ -236,6 +239,9 @@
 
 <div class="section">
   <div class="section-title">Productos disponibles</div>
+  <div class="search-wrap">
+    <input type="text" class="search-input" id="search-input" placeholder="Buscar producto..." oninput="onSearch(this.value)" />
+  </div>
   <div class="grid" id="grid">
     <div class="grid-loading"><span class="spinner"></span>Cargando productos...</div>
   </div>
@@ -332,9 +338,10 @@
 
 <script>
   const WHATSAPP = "5491133200721";
-  let products = [];
-  let cart     = [];
-  let activeP  = null;
+  let products    = [];
+  let cart        = [];
+  let activeP     = null;
+  let searchQuery = "";
 
   loadAll();
 
@@ -382,6 +389,12 @@
 
   function fmt(n) { return "$" + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
 
+  // ── BUSCADOR ──
+  function onSearch(value) {
+    searchQuery = value.trim().toLowerCase();
+    renderGrid();
+  }
+
   // ── RENDER GRILLA PRODUCTOS ──
   function renderGrid() {
     const grid = document.getElementById("grid");
@@ -392,7 +405,16 @@
       return;
     }
 
-    products.forEach(p => {
+    const visible = searchQuery
+      ? products.filter(p => p.name.toLowerCase().includes(searchQuery))
+      : products;
+
+    if (!visible.length) {
+      grid.innerHTML = `<div class="grid-loading">No se encontraron productos para "${searchQuery}".</div>`;
+      return;
+    }
+
+    visible.forEach(p => {
       const hasPrice = p.wholesalePrice && p.wholesalePrice > 0;
       const card = document.createElement("div");
       card.className = "card";

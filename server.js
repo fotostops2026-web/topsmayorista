@@ -13,7 +13,6 @@ const STORE_URL    = process.env.STORE_URL    || "https://tops19.mitiendanube.co
 const TN_STORE_ID  = process.env.TN_STORE_ID  || "";
 const TN_TOKEN     = process.env.TN_TOKEN     || "";
 const ADMIN_PASS   = process.env.ADMIN_PASS   || "admin2026";
-const CATALOG_PASS = process.env.CATALOG_PASS || "tops2026";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
 
 const PRICES_FILE     = path.join(__dirname, "prices.json");
@@ -258,11 +257,6 @@ async function getProducts(forceRefresh = false) {
 // ── RUTAS ──────────────────────────────────────────────────────────────────────
 app.get("/admin",    (req, res) => res.redirect("/admin.html"));
 app.get("/catalogo", (req, res) => res.redirect("/catalogo.html"));
-
-app.post("/api/auth/catalog", (req, res) => {
-  if (req.body.password === CATALOG_PASS) return res.json({ ok: true });
-  res.status(401).json({ error: "Contraseña incorrecta" });
-});
 
 app.post("/api/auth/admin", (req, res) => {
   if (req.body.password === ADMIN_PASS) return res.json({ ok: true });
