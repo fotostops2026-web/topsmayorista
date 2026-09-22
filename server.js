@@ -15,9 +15,25 @@ const TN_TOKEN     = process.env.TN_TOKEN     || "";
 const ADMIN_PASS   = process.env.ADMIN_PASS   || "admin2026";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
 
-const PRICES_FILE     = path.join(__dirname, "prices.json");
-const CONDITIONS_FILE = path.join(__dirname, "conditions.json");
-const CACHE_FILE      = path.join(__dirname, "products-cache.json");
+// Si hay un volumen de Railway montado, los datos persisten ahí entre deploys.
+// Sin volumen, se guardan junto al código y se pierden en cada redeploy.
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname;
+
+const PRICES_FILE     = path.join(DATA_DIR, "prices.json");
+const CONDITIONS_FILE = path.join(DATA_DIR, "conditions.json");
+const CACHE_FILE      = path.join(DATA_DIR, "products-cache.json");
+
+// La primera vez que corre con un volumen vacío, lo sembramos con los
+// valores por defecto del repo para no arrancar en blanco.
+if (DATA_DIR !== __dirname) {
+  for (const name of ["prices.json", "conditions.json"]) {
+    const target = path.join(DATA_DIR, name);
+    const source = path.join(__dirname, name);
+    if (!fs.existsSync(target) && fs.existsSync(source)) {
+      fs.copyFileSync(source, target);
+    }
+  }
+}
 
 // ── UPSTASH REDIS (persistencia en producción) ─────────────────────────────────
 // Usa Redis si hay credenciales, sino usa archivos locales
