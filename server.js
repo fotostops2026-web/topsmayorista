@@ -148,8 +148,12 @@ async function fetchFromAPI() {
 
 // ── SCRAPING ──────────────────────────────────────────────────────────────────
 async function fetchPage(url) {
-  const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; TopsBot/1.0)" } });
-  return res.text();
+  const res  = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; TopsBot/1.0)" } });
+  const html = await res.text();
+  if (!res.ok) {
+    console.warn(`fetchPage: ${url} -> HTTP ${res.status} (${html.length} bytes)`);
+  }
+  return html;
 }
 
 async function scrapeProductDetail(url) {
@@ -226,7 +230,11 @@ async function scrapeAllProducts() {
       items.push({ id: String(id), name, href: href?.startsWith("http") ? href : `${STORE_URL}${href}` });
     });
 
-    if (items.length === 0) break;
+    if (items.length === 0) {
+      const title = $("title").text().trim();
+      console.warn(`Scraping: sin productos reconocibles en ${url} (${html.length} bytes, título: "${title}")`);
+      break;
+    }
 
     // Si ningún producto de esta página es nuevo, la tienda ignoró el ?page= y
     // estamos viendo la página 1 otra vez: dejamos de pedir páginas.
