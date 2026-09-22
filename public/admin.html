@@ -127,7 +127,24 @@
     .prod-badge.set   { background: var(--green); color: #fff; }
     .prod-badge.unset { background: #f0b490; color: #fff; }
 
+    .prod-card.is-hidden { opacity: .5; }
+    .prod-hidden-banner {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,.55); color: #fff; font-size: .68rem; font-weight: 700;
+      letter-spacing: 1.5px; text-transform: uppercase; text-align: center; padding: 0 10px;
+    }
+
     .prod-body { padding: 14px 16px; flex: 1; display: flex; flex-direction: column; gap: 8px; }
+
+    .btn-hide {
+      width: 100%; padding: 9px; margin-top: 8px; background: #fff; color: var(--red);
+      border: 1px solid var(--red); font-family: 'Montserrat', sans-serif;
+      font-size: .64rem; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+      cursor: pointer; transition: background .15s, color .15s;
+    }
+    .btn-hide:hover { background: var(--red); color: #fff; }
+    .btn-hide.is-hidden { border-color: var(--green); color: var(--green); }
+    .btn-hide.is-hidden:hover { background: var(--green); color: #fff; }
     .prod-name {
       font-size: .88rem; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
       line-height: 1.3;
@@ -184,6 +201,7 @@
     <div class="stat-card"><div class="val" id="stat-total">—</div><div class="lbl">Productos</div></div>
     <div class="stat-card"><div class="val" id="stat-priced">—</div><div class="lbl">Con precio</div></div>
     <div class="stat-card"><div class="val" id="stat-missing">—</div><div class="lbl">Sin precio</div></div>
+    <div class="stat-card"><div class="val" id="stat-hidden">—</div><div class="lbl">Ocultos</div></div>
   </div>
 
   <!-- CONDICIONES -->
@@ -216,6 +234,7 @@
   let adminPassword = "";
   let products      = [];
   let prices        = {};
+  let hiddenIds     = new Set();
 
   // ── LOGIN ──
   function login() {
@@ -242,12 +261,13 @@
   async function loadData() {
     try {
       const [prodRes, priceRes, condRes] = await Promise.all([
-        fetch("/api/products"),
+        fetch("/api/products?includeHidden=1"),
         fetch("/api/prices"),
         fetch("/api/conditions"),
       ]);
-      products = await prodRes.json();
-      prices   = await priceRes.json();
+      products  = await prodRes.json();
+      prices    = await priceRes.json();
+      hiddenIds = new Set(products.filter(p => p.hidden).map(p => p.id));
       const cond = await condRes.json();
       renderGrid();
       loadConditions(cond);
@@ -288,19 +308,23 @@
     grid.innerHTML = "";
 
     let priced = 0;
+    let hidden = 0;
 
     products.forEach(p => {
-      const wp  = prices[p.id];
-      if (wp) priced++;
+      const wp        = prices[p.id];
+      const isHidden  = hiddenIds.has(p.id);
+      if (isHidden) hidden++;
+      else if (wp) priced++;
 
       const card = document.createElement("div");
-      card.className = "prod-card";
+      card.className = `prod-card ${isHidden ? 'is-hidden' : ''}`;
       card.innerHTML = `
         <div class="prod-img">
           <img src="${p.image || ''}" alt="${p.name}" loading="lazy" />
           <span class="prod-badge ${wp ? 'set' : 'unset'}" id="badge-${p.id}">
             ${wp ? '✓ Con precio' : 'Sin precio'}
           </span>
+          ${isHidden ? '<div class="prod-hidden-banner">Oculto del catálogo</div>' : ''}
         </div>
         <div class="prod-body">
           <div class="prod-name">${p.name}</div>
@@ -322,17 +346,43 @@
               onchange="onPriceChange('${p.id}', this)"
             />
           </div>
+          <button class="btn-hide ${isHidden ? 'is-hidden' : ''}" id="hide-${p.id}" onclick="toggleHidden('${p.id}')">
+            ${isHidden ? '↺ Restaurar al catálogo' : '🗑 Ocultar del catálogo'}
+          </button>
         </div>
       `;
       grid.appendChild(card);
     });
 
-    const missing = products.length - priced;
+    const missing = (products.length - hidden) - priced;
     document.getElementById("stat-total").textContent   = products.length;
     document.getElementById("stat-priced").textContent  = priced;
     document.getElementById("stat-missing").textContent = missing;
+    document.getElementById("stat-hidden").textContent  = hidden;
     document.getElementById("loading").style.display       = "none";
     document.getElementById("products-grid").style.display = "";
+  }
+
+  // ── OCULTAR / RESTAURAR PRODUCTO ──
+  async function toggleHidden(id) {
+    const wasHidden = hiddenIds.has(id);
+    if (wasHidden) hiddenIds.delete(id);
+    else hiddenIds.add(id);
+
+    try {
+      const res = await fetch("/api/hidden", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: adminPassword, hidden: [...hiddenIds] }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Error");
+      showStatus(wasHidden ? "✓ Producto restaurado al catálogo" : "✓ Producto ocultado del catálogo", "ok");
+      renderGrid();
+    } catch (e) {
+      // revertir el cambio local si falló el guardado
+      if (wasHidden) hiddenIds.add(id); else hiddenIds.delete(id);
+      showStatus("Error al actualizar: " + e.message, "err");
+    }
   }
 
   function onPriceChange(id, input) {
@@ -351,8 +401,9 @@
   }
 
   function updateStats() {
-    const priced  = Object.keys(prices).length;
-    const missing = products.length - priced;
+    const visible = products.filter(p => !hiddenIds.has(p.id));
+    const priced  = visible.filter(p => prices[p.id]).length;
+    const missing = visible.length - priced;
     document.getElementById("stat-priced").textContent  = priced;
     document.getElementById("stat-missing").textContent = missing;
   }

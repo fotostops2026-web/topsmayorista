@@ -22,6 +22,7 @@ const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname;
 const PRICES_FILE     = path.join(DATA_DIR, "prices.json");
 const CONDITIONS_FILE = path.join(DATA_DIR, "conditions.json");
 const CACHE_FILE      = path.join(DATA_DIR, "products-cache.json");
+const HIDDEN_FILE     = path.join(DATA_DIR, "hidden-products.json");
 
 // La primera vez que corre con un volumen vacío, lo sembramos con los
 // valores por defecto del repo para no arrancar en blanco.
@@ -286,10 +287,18 @@ app.post("/api/auth/admin", (req, res) => {
 
 app.get("/api/products", async (req, res) => {
   try {
-    const [cache, prices] = await Promise.all([
+    const includeHidden = req.query.includeHidden === "1";
+    const [cache, prices, hidden] = await Promise.all([
       loadData("products_cache", CACHE_FILE, { ts: 0, data: [] }),
       loadData("prices", PRICES_FILE, {}),
+      loadData("hidden_products", HIDDEN_FILE, []),
     ]);
+    const hiddenSet = new Set(hidden);
+
+    const withExtras = (list) =>
+      list
+        .filter((p) => includeHidden || !hiddenSet.has(p.id))
+        .map((p) => ({ ...p, wholesalePrice: prices[p.id] ?? null, hidden: hiddenSet.has(p.id) }));
 
     const cached   = cache.data || [];
     const isStale  = Date.now() - (cache.ts || 0) >= CACHE_TTL_MS;
@@ -297,7 +306,7 @@ app.get("/api/products", async (req, res) => {
 
     // Si hay datos en caché, los devolvemos INMEDIATAMENTE (aunque estén vencidos)
     if (!isEmpty) {
-      res.json(cached.map((p) => ({ ...p, wholesalePrice: prices[p.id] ?? null })));
+      res.json(withExtras(cached));
       // Si el caché está vencido, actualizamos en el fondo sin bloquear al cliente
       if (isStale) {
         getProducts(true).catch((e) => console.warn("Background sync failed:", e.message));
@@ -307,11 +316,19 @@ app.get("/api/products", async (req, res) => {
 
     // Solo si no hay nada en caché esperamos la sincronización (primer arranque)
     const products = await getProducts();
-    res.json(products.map((p) => ({ ...p, wholesalePrice: prices[p.id] ?? null })));
+    res.json(withExtras(products));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener productos" });
   }
+});
+
+app.post("/api/hidden", async (req, res) => {
+  const { password, hidden } = req.body;
+  if (password !== ADMIN_PASS) return res.status(401).json({ error: "Sin autorización" });
+  if (!Array.isArray(hidden)) return res.status(400).json({ error: "Datos inválidos" });
+  await saveData("hidden_products", HIDDEN_FILE, hidden.map(String));
+  res.json({ ok: true });
 });
 
 app.get("/api/prices", async (req, res) => {
