@@ -36,6 +36,16 @@ if (DATA_DIR !== __dirname) {
   }
 }
 
+console.log(`DATA_DIR: ${DATA_DIR} (${DATA_DIR === __dirname ? "sin volumen" : "volumen Railway"})`);
+try {
+  const probe = path.join(DATA_DIR, ".write-test");
+  fs.writeFileSync(probe, "ok");
+  fs.unlinkSync(probe);
+  console.log("DATA_DIR: escritura OK");
+} catch (e) {
+  console.error(`DATA_DIR: NO se puede escribir (${e.code}): ${e.message}`);
+}
+
 // ── UPSTASH REDIS (persistencia en producción) ─────────────────────────────────
 // Usa Redis si hay credenciales, sino usa archivos locales
 const REDIS_URL   = process.env.UPSTASH_REDIS_REST_URL   || "";
@@ -72,11 +82,14 @@ async function redisSet(key, value) {
 // ── HELPERS ARCHIVO/REDIS ──────────────────────────────────────────────────────
 function loadFile(file, fallback = {}) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); }
-  catch { return fallback; }
+  catch (e) {
+    if (e.code !== "ENOENT") console.error(`loadFile: no se pudo leer ${file}: ${e.message}`);
+    return fallback;
+  }
 }
 function saveFile(file, data) {
   try { fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8"); }
-  catch { /* en producción el FS puede ser de solo lectura */ }
+  catch (e) { console.error(`saveFile: no se pudo escribir ${file}: ${e.message}`); }
 }
 
 async function loadData(redisKey, file, fallback = {}) {
