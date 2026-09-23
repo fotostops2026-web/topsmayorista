@@ -5,8 +5,17 @@ const fs       = require("fs");
 const path     = require("path");
 
 const app = express();
+app.set("etag", false);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+
+// Evita que cualquier proxy/CDN/navegador cachee las respuestas de la API:
+// sin esto, una respuesta vieja (ej. catálogo vacío antes del primer sync)
+// puede quedar servida indefinidamente sin volver a llegar al servidor.
+app.use("/api", (req, res, next) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  next();
+});
 
 // ── CONFIGURACIÓN ──────────────────────────────────────────────────────────────
 const STORE_URL    = process.env.STORE_URL    || "https://tops19.mitiendanube.com";
