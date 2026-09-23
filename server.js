@@ -136,6 +136,8 @@ async function fetchFromAPI() {
     if (!Array.isArray(data) || data.length === 0) break;
 
     data.forEach((p) => {
+      // Solo lo que está publicado en la tienda (lo despublicado no se ofrece)
+      if (p.published === false) return;
       const attributes = p.attributes || [];
       const colorIdx   = attributes.findIndex((a) => (a.es || "").toLowerCase().includes("color"));
       const sizeIdx    = attributes.findIndex((a) => {
@@ -304,7 +306,7 @@ async function scrapeProductDetail(url) {
     let sku = "";
     const varSkuMatch = html.match(/LS\.variants\s*=\s*\[[\s\S]*?"sku"\s*:\s*"([^"]+)"/);
     if (varSkuMatch) {
-      const raw = varSkuMatch[1];
+      const raw = varSkuMatch[1].replace(/\\\//g, "/");
       sku = raw.replace(/\/(i|v)\d+.*$/i, "").replace(/\*.*$/, "").trim();
     }
     result.sku = sku;
