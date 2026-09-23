@@ -34,6 +34,7 @@ const PRICES_FILE     = path.join(DATA_DIR, "prices.json");
 const CONDITIONS_FILE = path.join(DATA_DIR, "conditions.json");
 const CACHE_FILE      = path.join(DATA_DIR, "products-cache.json");
 const HIDDEN_FILE     = path.join(DATA_DIR, "hidden-products.json");
+const POSITIONS_FILE  = path.join(DATA_DIR, "positions.json");
 
 // La primera vez que corre con un volumen vacío, lo sembramos con los
 // valores por defecto del repo para no arrancar en blanco.
@@ -402,22 +403,31 @@ app.post("/api/auth/admin", (req, res) => {
 app.get("/api/products", async (req, res) => {
   try {
     const includeHidden = req.query.includeHidden === "1";
-    const [cache, prices, hidden] = await Promise.all([
+    const [cache, prices, hidden, positions] = await Promise.all([
       loadData("products_cache", CACHE_FILE, { ts: 0, data: [] }),
       loadData("prices", PRICES_FILE, {}),
       loadData("hidden_products", HIDDEN_FILE, []),
+      loadData("positions", POSITIONS_FILE, {}),
     ]);
     const hiddenSet = new Set(hidden);
+    const rank = { top: 0, bottom: 2 };
 
+    // Orden: "Arriba" primero, "Normal" en el orden de Tiendanube, "Abajo" al final
     const withExtras = (list) =>
       list
         .filter((p) => includeHidden || !hiddenSet.has(p.id))
-        .map((p) => ({ ...p, wholesalePrice: prices[p.id] ?? null, hidden: hiddenSet.has(p.id) }));
+        .map((p, i) => ({ p, i, r: rank[positions[p.id]] ?? 1 }))
+        .sort((a, b) => a.r - b.r || a.i - b.i)
+        .map(({ p }) => ({
+          ...p,
+          wholesalePrice: prices[p.id] ?? null,
+          hidden: hiddenSet.has(p.id),
+          position: positions[p.id] || "normal",
+        }));
 
     const cached   = cache.data || [];
     const isStale  = cache.v !== CACHE_VERSION || Date.now() - (cache.ts || 0) >= CACHE_TTL_MS;
     const isEmpty  = cached.length === 0;
-    console.log(`GET /api/products: caché=${cached.length} productos, isStale=${isStale}, isEmpty=${isEmpty}`);
 
     // Si hay datos en caché, los devolvemos INMEDIATAMENTE (aunque estén vencidos)
     if (!isEmpty) {
@@ -443,6 +453,20 @@ app.post("/api/hidden", async (req, res) => {
   if (password !== ADMIN_PASS) return res.status(401).json({ error: "Sin autorización" });
   if (!Array.isArray(hidden)) return res.status(400).json({ error: "Datos inválidos" });
   await saveData("hidden_products", HIDDEN_FILE, hidden.map(String));
+  res.json({ ok: true });
+});
+
+app.post("/api/positions", async (req, res) => {
+  const { password, positions } = req.body;
+  if (password !== ADMIN_PASS) return res.status(401).json({ error: "Sin autorización" });
+  if (!positions || typeof positions !== "object" || Array.isArray(positions)) {
+    return res.status(400).json({ error: "Datos inválidos" });
+  }
+  const clean = {};
+  for (const [id, pos] of Object.entries(positions)) {
+    if (pos === "top" || pos === "bottom") clean[String(id)] = pos;
+  }
+  await saveData("positions", POSITIONS_FILE, clean);
   res.json({ ok: true });
 });
 

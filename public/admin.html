@@ -145,6 +145,29 @@
     .btn-hide:hover { background: var(--red); color: #fff; }
     .btn-hide.is-hidden { border-color: var(--green); color: var(--green); }
     .btn-hide.is-hidden:hover { background: var(--green); color: #fff; }
+
+    .pos-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .pos-row label { font-size: .6rem; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+    .pos-row select {
+      flex: 1; padding: 7px 8px; border: 1px solid var(--border); background: #fff;
+      font-family: 'Montserrat', sans-serif; font-size: .72rem; font-weight: 600; cursor: pointer;
+    }
+    .pos-row select.top    { border-color: var(--green);  color: var(--green); }
+    .pos-row select.bottom { border-color: var(--orange); color: var(--orange); }
+
+    .prod-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+    .prod-toolbar input {
+      flex: 1; min-width: 200px; padding: 9px 11px; border: 1px solid var(--border);
+      font-family: 'Montserrat', sans-serif; font-size: .85rem; outline: none;
+    }
+    .prod-toolbar input:focus { border-color: var(--dark); }
+    .btn-small {
+      padding: 9px 12px; background: #fff; border: 1px solid var(--dark); color: var(--dark);
+      font-family: 'Montserrat', sans-serif; font-size: .62rem; font-weight: 700;
+      letter-spacing: 1px; text-transform: uppercase; cursor: pointer;
+    }
+    .btn-small:hover:not(:disabled) { background: var(--dark); color: #fff; }
+    .btn-small:disabled { opacity: .35; cursor: not-allowed; }
     .prod-name {
       font-size: .88rem; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
       line-height: 1.3;
@@ -225,6 +248,12 @@
       <h2>Todos los productos</h2>
       <span class="sync-note" id="sync-note"></span>
     </div>
+    <div class="prod-toolbar">
+      <input type="text" id="admin-search" placeholder="Buscar (ej: bota, borceguí)..." oninput="onAdminSearch(this.value)" />
+      <button class="btn-small" id="bulk-bottom" onclick="bulkPosition('bottom')" disabled>⬇ Mandar al final</button>
+      <button class="btn-small" id="bulk-top" onclick="bulkPosition('top')" disabled>⬆ Mandar arriba</button>
+      <button class="btn-small" id="bulk-normal" onclick="bulkPosition('normal')" disabled>Orden normal</button>
+    </div>
     <div id="loading"><span class="spinner"></span>Cargando productos...</div>
     <div class="products-grid" id="products-grid" style="display:none"></div>
   </div>
@@ -235,6 +264,8 @@
   let products      = [];
   let prices        = {};
   let hiddenIds     = new Set();
+  let positions     = {};
+  let adminQuery    = "";
 
   // ── LOGIN ──
   function login() {
@@ -268,6 +299,7 @@
       products  = await prodRes.json();
       prices    = await priceRes.json();
       hiddenIds = new Set(products.filter(p => p.hidden).map(p => p.id));
+      positions = Object.fromEntries(products.filter(p => p.position && p.position !== "normal").map(p => [p.id, p.position]));
       const cond = await condRes.json();
       renderGrid();
       loadConditions(cond);
@@ -309,12 +341,23 @@
 
     let priced = 0;
     let hidden = 0;
-
     products.forEach(p => {
+      if (hiddenIds.has(p.id)) hidden++;
+      else if (prices[p.id]) priced++;
+    });
+
+    const shown = filteredProducts();
+    ["bulk-bottom", "bulk-top", "bulk-normal"].forEach(id => {
+      const btn = document.getElementById(id);
+      btn.disabled = !adminQuery || shown.length === 0;
+    });
+    document.getElementById("sync-note").textContent =
+      adminQuery ? `${shown.length} de ${products.length} coinciden con "${adminQuery}"` : "";
+
+    shown.forEach(p => {
       const wp        = prices[p.id];
       const isHidden  = hiddenIds.has(p.id);
-      if (isHidden) hidden++;
-      else if (wp) priced++;
+      const pos       = positions[p.id] || "normal";
 
       const card = document.createElement("div");
       card.className = `prod-card ${isHidden ? 'is-hidden' : ''}`;
@@ -346,6 +389,14 @@
               onchange="onPriceChange('${p.id}', this)"
             />
           </div>
+          <div class="pos-row">
+            <label>Posición</label>
+            <select class="${pos}" onchange="setPosition('${p.id}', this.value)">
+              <option value="top" ${pos === "top" ? "selected" : ""}>⬆ Arriba</option>
+              <option value="normal" ${pos === "normal" ? "selected" : ""}>Normal</option>
+              <option value="bottom" ${pos === "bottom" ? "selected" : ""}>⬇ Abajo</option>
+            </select>
+          </div>
           <button class="btn-hide ${isHidden ? 'is-hidden' : ''}" id="hide-${p.id}" onclick="toggleHidden('${p.id}')">
             ${isHidden ? '↺ Restaurar al catálogo' : '🗑 Ocultar del catálogo'}
           </button>
@@ -361,6 +412,63 @@
     document.getElementById("stat-hidden").textContent  = hidden;
     document.getElementById("loading").style.display       = "none";
     document.getElementById("products-grid").style.display = "";
+  }
+
+  // ── BÚSQUEDA Y ORDEN ──
+  const norm = s => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+  function filteredProducts() {
+    if (!adminQuery) return products;
+    const q = norm(adminQuery);
+    return products.filter(p => norm(p.name).includes(q) || norm(p.sku).includes(q));
+  }
+
+  function onAdminSearch(value) {
+    adminQuery = value.trim();
+    renderGrid();
+  }
+
+  async function savePositions(message) {
+    const res = await fetch("/api/positions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: adminPassword, positions }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || "Error");
+    // El servidor devuelve los productos ya ordenados
+    const prodRes = await fetch("/api/products?includeHidden=1");
+    products = await prodRes.json();
+    renderGrid();
+    showStatus(message, "ok");
+  }
+
+  async function setPosition(id, pos) {
+    const prev = positions[id];
+    if (pos === "normal") delete positions[id]; else positions[id] = pos;
+    const label = { top: "arriba de todo", bottom: "al final", normal: "en su orden normal" }[pos];
+    try {
+      await savePositions(`✓ Producto ubicado ${label}`);
+    } catch (e) {
+      if (prev) positions[id] = prev; else delete positions[id];
+      showStatus("Error al guardar la posición: " + e.message, "err");
+      renderGrid();
+    }
+  }
+
+  async function bulkPosition(pos) {
+    const shown = filteredProducts();
+    if (!shown.length) return;
+    const label = { top: "arriba de todo", bottom: "al final", normal: "en su orden normal" }[pos];
+    if (!confirm(`¿Poner ${shown.length} productos que coinciden con "${adminQuery}" ${label}?`)) return;
+    const backup = { ...positions };
+    shown.forEach(p => { if (pos === "normal") delete positions[p.id]; else positions[p.id] = pos; });
+    try {
+      await savePositions(`✓ ${shown.length} productos ubicados ${label}`);
+    } catch (e) {
+      positions = backup;
+      showStatus("Error al guardar las posiciones: " + e.message, "err");
+      renderGrid();
+    }
   }
 
   // ── OCULTAR / RESTAURAR PRODUCTO ──
