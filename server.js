@@ -157,6 +157,7 @@ async function fetchFromAPI() {
       all.push({
         id:    String(p.id),
         name:  p.name?.es || p.name?.[Object.keys(p.name || {})[0]] || "Producto",
+        sku:   (p.variants?.[0]?.sku || "").replace(/\/(i|v)\d+.*$/i, "").replace(/\*.*$/, "").trim(),
         image:  images[0] || "",
         images: images,
         colorImages,
@@ -172,9 +173,13 @@ async function fetchFromAPI() {
 }
 
 // ── SCRAPING ──────────────────────────────────────────────────────────────────
+// No depende de clases CSS del tema (Tiendanube las cambia): identifica los
+// productos por el patrón de URL /productos/<slug>/ y lee cada ficha.
+const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
 async function fetchPage(url) {
   const res  = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; TopsBot/1.0)" },
+    headers: { "User-Agent": BROWSER_UA, "Accept-Language": "es-AR,es;q=0.9" },
     signal: AbortSignal.timeout(20000),
   });
   const html = await res.text();
@@ -184,11 +189,87 @@ async function fetchPage(url) {
   return html;
 }
 
+function extractProductUrls(html, baseUrl) {
+  const urls = new Set();
+  const re = /(?:href|data-href|data-url)\s*=\s*["']([^"']*\/productos\/[^"'?#\s\/]+\/?)["']/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    try {
+      const u = new URL(m[1].replace(/\\\//g, "/"), baseUrl);
+      u.hash = ""; u.search = "";
+      if (!u.pathname.endsWith("/")) u.pathname += "/";
+      urls.add(u.toString());
+    } catch { /* URL inválida */ }
+  }
+  return [...urls];
+}
+
+async function collectProductUrls() {
+  const urls = new Set();
+
+  for (let page = 1; page <= 40; page++) {
+    const listUrl = `${STORE_URL}/productos/?page=${page}`;
+    let html;
+    try { html = await fetchPage(listUrl); } catch (e) { console.warn(`Scraping: ${listUrl} falló: ${e.message}`); break; }
+    const found = extractProductUrls(html, STORE_URL);
+    const before = urls.size;
+    found.forEach((u) => urls.add(u));
+    if (urls.size === before) break;
+  }
+  if (urls.size > 0) {
+    console.log(`Scraping: ${urls.size} URLs de producto desde el listado`);
+    return [...urls];
+  }
+
+  // Fallback: sitemap (puede ser un índice que apunta a otros sitemaps)
+  const queue = [`${STORE_URL}/sitemap.xml`];
+  const seen  = new Set();
+  while (queue.length && seen.size < 20) {
+    const sm = queue.shift();
+    if (seen.has(sm)) continue;
+    seen.add(sm);
+    let xml;
+    try { xml = await fetchPage(sm); } catch { continue; }
+    for (const [, loc] of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {
+      if (/\.xml(\?|$)/i.test(loc)) queue.push(loc);
+      else if (/\/productos\/[^\/?#]+\/?$/i.test(loc)) urls.add(loc.endsWith("/") ? loc : loc + "/");
+    }
+  }
+  console.log(`Scraping: ${urls.size} URLs de producto desde el sitemap`);
+  return [...urls];
+}
+
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      out[idx] = await fn(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 async function scrapeProductDetail(url) {
   try {
     const html = await fetchPage(url);
     const $    = cheerio.load(html);
     const result = { colors: [], sizes: [], colorImages: {}, image: "", images: [], retailPrice: 0 };
+
+    const idMatch =
+      html.match(/"product_id"\s*:\s*"?(\d+)/) ||
+      html.match(/data-product-id\s*=\s*["'](\d+)["']/) ||
+      html.match(/LS\.product\s*=\s*\{[^}]*?"id"\s*:\s*(\d+)/);
+    const slug = (url.match(/\/productos\/([^\/?#]+)/) || [])[1] || url;
+    result.id = idMatch ? idMatch[1] : `slug:${slug}`;
+
+    const rawName =
+      $('meta[property="og:title"]').attr("content") ||
+      $("h1").first().text() ||
+      $("title").text();
+    result.name = (rawName || slug).replace(/\s+/g, " ").replace(/\s*[-|–]\s*Tops\s*$/i, "").trim();
 
     // Extraer colores, talles e imágenes por color directo de LS.variants
     // Cada variante tiene: option0 (color), option1 (talle), image_url (foto del color)
@@ -234,84 +315,75 @@ async function scrapeProductDetail(url) {
       return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b);
     });
     return result;
-  } catch {
-    return { colors: [], sizes: [], image: "", retailPrice: 0 };
+  } catch (e) {
+    console.warn(`Scraping: no se pudo leer ${url}: ${e.message}`);
+    return null;
   }
 }
 
-async function scrapeAllProducts() {
+async function scrapeAllProducts({ limit } = {}) {
+  let urls = await collectProductUrls();
+  if (limit) urls = urls.slice(0, limit);
+
+  const details = await mapLimit(urls, 6, (url) => scrapeProductDetail(url));
   const products = [];
   const seenIds  = new Set();
-  let page = 1;
-  while (page <= 30) {
-    const url  = `${STORE_URL}/productos/?page=${page}`;
-    const html = await fetchPage(url);
-    const $    = cheerio.load(html);
-    const items = [];
-
-    $("[data-product-id], .js-item-product, .item-list .item").each((_, el) => {
-      const $el  = $(el);
-      const id   = $el.attr("data-product-id") || $el.find("[data-product-id]").attr("data-product-id");
-      const name = $el.find(".item-name, .js-item-name, h2, h3").first().text().trim();
-      const href = $el.find("a").first().attr("href");
-      if (!name || !id) return;
-      items.push({ id: String(id), name, href: href?.startsWith("http") ? href : `${STORE_URL}${href}` });
+  for (const d of details) {
+    if (!d || !d.name || seenIds.has(d.id)) continue;
+    seenIds.add(d.id);
+    products.push({
+      id:          d.id,
+      name:        d.name,
+      sku:         d.sku || "",
+      image:       d.image,
+      images:      d.images.length ? d.images : (d.image ? [d.image] : []),
+      colorImages: d.colorImages || {},
+      retailPrice: d.retailPrice,
+      colors:      d.colors.length ? d.colors : ["Único"],
+      sizes:       d.sizes.length  ? d.sizes  : ["Único"],
     });
-
-    if (items.length === 0) {
-      const title = $("title").text().trim();
-      console.warn(`Scraping: sin productos reconocibles en ${url} (${html.length} bytes, título: "${title}")`);
-      break;
-    }
-
-    // Si ningún producto de esta página es nuevo, la tienda ignoró el ?page= y
-    // estamos viendo la página 1 otra vez: dejamos de pedir páginas.
-    const newItems = items.filter((item) => !seenIds.has(item.id));
-    if (newItems.length === 0) break;
-
-    for (const item of newItems) {
-      seenIds.add(item.id);
-      const detail = await scrapeProductDetail(item.href);
-      products.push({
-        id:          item.id,
-        name:        item.name,
-        sku:         detail.sku || "",
-        image:       detail.image,
-        images:      detail.images.length ? detail.images : (detail.image ? [detail.image] : []),
-        colorImages: detail.colorImages || {},
-        retailPrice: detail.retailPrice,
-        colors:      detail.colors.length ? detail.colors : ["Único"],
-        sizes:       detail.sizes.length  ? detail.sizes  : ["Único"],
-      });
-    }
-
-    page++;
   }
   return products;
 }
 
 // ── CACHE DE PRODUCTOS ─────────────────────────────────────────────────────────
-async function getProducts(forceRefresh = false) {
-  const cache = await loadData("products_cache", CACHE_FILE, { ts: 0, data: [] });
-  const ageMin = ((Date.now() - (cache.ts || 0)) / 60000).toFixed(1);
-  console.log(`getProducts: caché tiene ${(cache.data || []).length} productos, edad ${ageMin} min, forceRefresh=${forceRefresh}`);
+let syncInFlight = null;
 
-  if (!forceRefresh && Date.now() - (cache.ts || 0) < CACHE_TTL_MS && (cache.data || []).length > 0) {
-    return cache.data;
-  }
-
-  let products;
+async function syncProducts() {
+  let products = [];
   if (TN_STORE_ID && TN_TOKEN) {
     console.log("Sincronizando vía API de Tiendanube...");
-    products = await fetchFromAPI();
-  } else {
+    try { products = await fetchFromAPI(); }
+    catch (e) { console.warn(`API de Tiendanube falló (${e.message}), probando scraping...`); }
+  }
+  if (products.length === 0) {
     console.log("Sincronizando vía scraping...");
     products = await scrapeAllProducts();
   }
-
-  await saveData("products_cache", CACHE_FILE, { ts: Date.now(), data: products });
-  console.log(`✓ ${products.length} productos sincronizados`);
   return products;
+}
+
+async function getProducts(forceRefresh = false) {
+  const cache  = await loadData("products_cache", CACHE_FILE, { ts: 0, data: [] });
+  const cached = cache.data || [];
+  const fresh  = Date.now() - (cache.ts || 0) < CACHE_TTL_MS;
+  console.log(`getProducts: caché=${cached.length} productos, edad ${((Date.now() - (cache.ts || 0)) / 60000).toFixed(1)} min, forceRefresh=${forceRefresh}`);
+
+  if (!forceRefresh && fresh && cached.length > 0) return cached;
+
+  if (!syncInFlight) {
+    syncInFlight = (async () => {
+      const products = await syncProducts();
+      if (products.length === 0 && cached.length > 0) {
+        console.warn("Sync devolvió 0 productos: se mantiene el caché anterior");
+        return cached;
+      }
+      await saveData("products_cache", CACHE_FILE, { ts: Date.now(), data: products });
+      console.log(`✓ ${products.length} productos sincronizados`);
+      return products;
+    })().finally(() => { syncInFlight = null; });
+  }
+  return syncInFlight;
 }
 
 // ── RUTAS ──────────────────────────────────────────────────────────────────────
@@ -406,6 +478,20 @@ app.get("/api/img", async (req, res) => {
   } catch { res.status(500).end(); }
 });
 
+app.get("/api/health", async (req, res) => {
+  const cache = await loadData("products_cache", CACHE_FILE, { ts: 0, data: [] });
+  res.json({
+    ok:         true,
+    service:    process.env.RAILWAY_SERVICE_NAME || "local",
+    project:    process.env.RAILWAY_PROJECT_NAME || "local",
+    deployment: (process.env.RAILWAY_DEPLOYMENT_ID || "local").slice(0, 8),
+    source:     TN_STORE_ID && TN_TOKEN ? "api" : "scraping",
+    storage:    REDIS_URL ? "redis" : (DATA_DIR === __dirname ? "archivo" : "volumen"),
+    products:   (cache.data || []).length,
+    cacheAgeMin: cache.ts ? Math.round((Date.now() - cache.ts) / 60000) : null,
+  });
+});
+
 app.post("/api/sync", async (req, res) => {
   if (req.body.password !== ADMIN_PASS) return res.status(401).json({ error: "Sin autorización" });
   try {
@@ -424,4 +510,32 @@ app.listen(PORT, async () => {
   console.log(`   Admin:    http://localhost:${PORT}/admin.html`);
   console.log(`   Redis:    ${REDIS_URL ? "✓ conectado" : "✗ usando archivos locales"}\n`);
   try { await getProducts(); } catch (e) { console.warn("No se pudo pre-cargar productos:", e.message); }
+
+  // Verifica de punta a punta que la URL pública sirve los productos
+  const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+  if (publicDomain) {
+    setTimeout(async () => {
+      try {
+        const r = await fetch(`https://${publicDomain}/api/products`, { signal: AbortSignal.timeout(20000) });
+        const data = await r.json();
+        console.log(`AUTOCHEQUEO https://${publicDomain}/api/products -> HTTP ${r.status}, ${Array.isArray(data) ? data.length : "?"} productos`);
+      } catch (e) {
+        console.warn(`AUTOCHEQUEO https://${publicDomain} falló: ${e.message}`);
+      }
+    }, 15000);
+  }
+
+  // Prueba el scraping contra la tienda real sin tocar el caché
+  if (process.env.SCRAPE_SELFTEST) {
+    const t0 = Date.now();
+    scrapeAllProducts()
+      .then((list) => {
+        const sample = list[0] ? JSON.stringify({ ...list[0], images: list[0].images.length }).slice(0, 400) : "-";
+        const conPrecio = list.filter((p) => p.retailPrice > 0).length;
+        const conColores = list.filter((p) => p.colors[0] !== "Único").length;
+        console.log(`SCRAPE_SELFTEST: ${list.length} productos en ${((Date.now() - t0) / 1000).toFixed(0)}s, con precio=${conPrecio}, con colores=${conColores}, ids numéricos=${list.filter((p) => /^\d+$/.test(p.id)).length}`);
+        console.log(`SCRAPE_SELFTEST ejemplo: ${sample}`);
+      })
+      .catch((e) => console.warn(`SCRAPE_SELFTEST falló: ${e.message}`));
+  }
 });
