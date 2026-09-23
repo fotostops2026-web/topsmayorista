@@ -117,7 +117,10 @@ async function fetchFromAPI() {
   while (true) {
     const res = await fetch(
       `https://api.tiendanube.com/v1/${TN_STORE_ID}/products?per_page=200&page=${page}`,
-      { headers: { Authentication: `bearer ${TN_TOKEN}`, "User-Agent": "Tops Mayorista App" } }
+      {
+        headers: { Authentication: `bearer ${TN_TOKEN}`, "User-Agent": "Tops Mayorista App" },
+        signal: AbortSignal.timeout(20000),
+      }
     );
     if (!res.ok) throw new Error(`API error ${res.status}`);
     const data = await res.json();
@@ -161,7 +164,10 @@ async function fetchFromAPI() {
 
 // ── SCRAPING ──────────────────────────────────────────────────────────────────
 async function fetchPage(url) {
-  const res  = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; TopsBot/1.0)" } });
+  const res  = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; TopsBot/1.0)" },
+    signal: AbortSignal.timeout(20000),
+  });
   const html = await res.text();
   if (!res.ok) {
     console.warn(`fetchPage: ${url} -> HTTP ${res.status} (${html.length} bytes)`);
