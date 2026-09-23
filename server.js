@@ -516,7 +516,7 @@ app.listen(PORT, async () => {
   try { await getProducts(); } catch (e) { console.warn("No se pudo pre-cargar productos:", e.message); }
 
   // Verifica de punta a punta que la URL pública sirve los productos
-  const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+  const publicDomain = process.env.SELFCHECK_DOMAIN || process.env.RAILWAY_PUBLIC_DOMAIN;
   if (publicDomain) {
     setTimeout(async () => {
       try {
