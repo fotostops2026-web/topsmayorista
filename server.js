@@ -284,6 +284,8 @@ async function scrapeAllProducts() {
 // ── CACHE DE PRODUCTOS ─────────────────────────────────────────────────────────
 async function getProducts(forceRefresh = false) {
   const cache = await loadData("products_cache", CACHE_FILE, { ts: 0, data: [] });
+  const ageMin = ((Date.now() - (cache.ts || 0)) / 60000).toFixed(1);
+  console.log(`getProducts: caché tiene ${(cache.data || []).length} productos, edad ${ageMin} min, forceRefresh=${forceRefresh}`);
 
   if (!forceRefresh && Date.now() - (cache.ts || 0) < CACHE_TTL_MS && (cache.data || []).length > 0) {
     return cache.data;
@@ -330,6 +332,7 @@ app.get("/api/products", async (req, res) => {
     const cached   = cache.data || [];
     const isStale  = Date.now() - (cache.ts || 0) >= CACHE_TTL_MS;
     const isEmpty  = cached.length === 0;
+    console.log(`GET /api/products: caché=${cached.length} productos, isStale=${isStale}, isEmpty=${isEmpty}`);
 
     // Si hay datos en caché, los devolvemos INMEDIATAMENTE (aunque estén vencidos)
     if (!isEmpty) {
