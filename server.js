@@ -23,6 +23,8 @@ const TN_STORE_ID  = process.env.TN_STORE_ID  || "";
 const TN_TOKEN     = process.env.TN_TOKEN     || "";
 const ADMIN_PASS   = process.env.ADMIN_PASS   || "admin2026";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
+// Subir este número invalida los cachés guardados con un formato anterior
+const CACHE_VERSION = 2;
 
 // Si hay un volumen de Railway montado, los datos persisten ahí entre deploys.
 // Sin volumen, se guardan junto al código y se pierden en cada redeploy.
@@ -368,7 +370,7 @@ async function syncProducts() {
 async function getProducts(forceRefresh = false) {
   const cache  = await loadData("products_cache", CACHE_FILE, { ts: 0, data: [] });
   const cached = cache.data || [];
-  const fresh  = Date.now() - (cache.ts || 0) < CACHE_TTL_MS;
+  const fresh  = cache.v === CACHE_VERSION && Date.now() - (cache.ts || 0) < CACHE_TTL_MS;
   console.log(`getProducts: caché=${cached.length} productos, edad ${((Date.now() - (cache.ts || 0)) / 60000).toFixed(1)} min, forceRefresh=${forceRefresh}`);
 
   if (!forceRefresh && fresh && cached.length > 0) return cached;
@@ -380,7 +382,7 @@ async function getProducts(forceRefresh = false) {
         console.warn("Sync devolvió 0 productos: se mantiene el caché anterior");
         return cached;
       }
-      await saveData("products_cache", CACHE_FILE, { ts: Date.now(), data: products });
+      await saveData("products_cache", CACHE_FILE, { v: CACHE_VERSION, ts: Date.now(), data: products });
       console.log(`✓ ${products.length} productos sincronizados`);
       return products;
     })().finally(() => { syncInFlight = null; });
@@ -413,7 +415,7 @@ app.get("/api/products", async (req, res) => {
         .map((p) => ({ ...p, wholesalePrice: prices[p.id] ?? null, hidden: hiddenSet.has(p.id) }));
 
     const cached   = cache.data || [];
-    const isStale  = Date.now() - (cache.ts || 0) >= CACHE_TTL_MS;
+    const isStale  = cache.v !== CACHE_VERSION || Date.now() - (cache.ts || 0) >= CACHE_TTL_MS;
     const isEmpty  = cached.length === 0;
     console.log(`GET /api/products: caché=${cached.length} productos, isStale=${isStale}, isEmpty=${isEmpty}`);
 
