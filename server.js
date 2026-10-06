@@ -24,7 +24,7 @@ const TN_TOKEN     = process.env.TN_TOKEN     || "";
 const ADMIN_PASS   = process.env.ADMIN_PASS   || "admin2026";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
 // Subir este número invalida los cachés guardados con un formato anterior
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 // Si hay un volumen de Railway montado, los datos persisten ahí entre deploys.
 // Sin volumen, se guardan junto al código y se pierden en cada redeploy.
@@ -35,6 +35,7 @@ const CONDITIONS_FILE = path.join(DATA_DIR, "conditions.json");
 const CACHE_FILE      = path.join(DATA_DIR, "products-cache.json");
 const HIDDEN_FILE     = path.join(DATA_DIR, "hidden-products.json");
 const POSITIONS_FILE  = path.join(DATA_DIR, "positions.json");
+const CATEGORY_FILE   = path.join(DATA_DIR, "category-filter.json");
 
 // La primera vez que corre con un volumen vacío, lo sembramos con los
 // valores por defecto del repo para no arrancar en blanco.
@@ -123,8 +124,44 @@ function parsePriceARS(str) {
 }
 
 // ── TIENDANUBE API ─────────────────────────────────────────────────────────────
+const tnHeaders = () => ({ Authentication: `bearer ${TN_TOKEN}`, "User-Agent": "Tops Mayorista App" });
+const esName = (n) => (typeof n === "string" ? n : n?.es || n?.[Object.keys(n || {})[0]] || "").trim();
+
+async function fetchCategoryTree() {
+  const tree = {};
+  try {
+    for (let page = 1; page <= 10; page++) {
+      const res = await fetch(
+        `https://api.tiendanube.com/v1/${TN_STORE_ID}/categories?per_page=200&page=${page}`,
+        { headers: tnHeaders(), signal: AbortSignal.timeout(20000) }
+      );
+      if (!res.ok) { console.warn(`Categorías: API error ${res.status}`); break; }
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) break;
+      data.forEach((c) => { tree[c.id] = { name: esName(c.name), parent: c.parent || null }; });
+      if (data.length < 200) break;
+    }
+  } catch (e) { console.warn(`Categorías: no se pudieron leer (${e.message})`); }
+  return tree;
+}
+
+function categoryPath(id, tree, seen = new Set()) {
+  const c = tree[id];
+  if (!c || !c.name || seen.has(id)) return "";
+  seen.add(id);
+  const parent = c.parent ? categoryPath(c.parent, tree, seen) : "";
+  return parent ? `${parent} > ${c.name}` : c.name;
+}
+
+// Deja solo las rutas más específicas ("Verano > Zapatillas" en vez de también "Verano")
+function leafPaths(paths) {
+  const uniq = [...new Set(paths.filter(Boolean))];
+  return uniq.filter((p) => !uniq.some((o) => o !== p && o.startsWith(p + " > ")));
+}
+
 async function fetchFromAPI() {
-  const all = [];
+  const all  = [];
+  const tree = await fetchCategoryTree();
   let page  = 1;
   while (true) {
     const res = await fetch(
@@ -159,6 +196,9 @@ async function fetchFromAPI() {
         const imgSrc = v.image?.src || images[0] || "";
         if (color && imgSrc && !colorImages[color]) colorImages[color] = imgSrc;
       });
+      (p.categories || []).forEach((c) => {
+        if (!tree[c.id]) tree[c.id] = { name: esName(c.name), parent: c.parent || null };
+      });
       all.push({
         id:    String(p.id),
         name:  p.name?.es || p.name?.[Object.keys(p.name || {})[0]] || "Producto",
@@ -169,11 +209,17 @@ async function fetchFromAPI() {
         retailPrice: parseFloat(p.variants?.[0]?.price || p.price || 0),
         colors: colors.length ? colors : ["Único"],
         sizes:  sizes.length  ? sizes  : ["Único"],
+        categoryIds: (p.categories || []).map((c) => c.id),
       });
     });
     if (data.length < 200) break;
     page++;
   }
+  // Las rutas se arman al final, cuando el árbol ya incluye las categorías vistas en productos
+  all.forEach((p) => {
+    p.categories = leafPaths(p.categoryIds.map((id) => categoryPath(id, tree)));
+    delete p.categoryIds;
+  });
   return all;
 }
 
@@ -276,6 +322,25 @@ async function scrapeProductDetail(url) {
       $("title").text();
     result.name = (rawName || slug).replace(/\s+/g, " ").replace(/\s*[-|–]\s*Tops\s*$/i, "").trim();
 
+    // Categoría: del breadcrumb (JSON-LD o links del breadcrumb)
+    let crumbs = [];
+    $('script[type="application/ld+json"]').each((_, el) => {
+      if (crumbs.length) return;
+      try {
+        const nodes = [].concat(JSON.parse($(el).contents().text())).flatMap((x) => x["@graph"] || [x]);
+        const list  = nodes.find((x) => x && x["@type"] === "BreadcrumbList");
+        if (list) crumbs = (list.itemListElement || []).map((it) => it.name || it.item?.name || "");
+      } catch { /* JSON-LD inválido */ }
+    });
+    if (!crumbs.length) {
+      crumbs = $(".breadcrumbs a, .breadcrumb a, nav[aria-label*='readcrumb'] a").map((_, a) => $(a).text()).get();
+    }
+    crumbs = crumbs.map((c) => c.replace(/\s+/g, " ").trim()).filter(Boolean);
+    if (crumbs.length && /^(inicio|home)$/i.test(crumbs[0])) crumbs.shift();
+    if (crumbs.length && crumbs[crumbs.length - 1].toLowerCase() === result.name.toLowerCase()) crumbs.pop();
+    crumbs = crumbs.filter((c) => !/^productos$/i.test(c));
+    result.categories = crumbs.length ? [crumbs.join(" > ")] : [];
+
     // Extraer colores, talles e imágenes por color directo de LS.variants
     // Cada variante tiene: option0 (color), option1 (talle), image_url (foto del color)
     const variantRegex = /"option0"\s*:\s*"([^"]+)"[^}]*?"option1"\s*:\s*"?([^",}]+)"?[^}]*?"image_url"\s*:\s*"([^"]+)"/g;
@@ -346,12 +411,47 @@ async function scrapeAllProducts({ limit } = {}) {
       retailPrice: d.retailPrice,
       colors:      d.colors.length ? d.colors : ["Único"],
       sizes:       d.sizes.length  ? d.sizes  : ["Único"],
+      categories:  d.categories || [],
     });
   }
   return products;
 }
 
 // ── CACHE DE PRODUCTOS ─────────────────────────────────────────────────────────
+// ── CATEGORÍAS ─────────────────────────────────────────────────────────────────
+const normCat = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
+
+// Cuenta productos por categoría, incluyendo las categorías padre ("Verano" suma a sus hijas)
+function categoryCounts(products) {
+  const counts = {};
+  products.forEach((p) => {
+    const seen = new Set();
+    (p.categories || []).forEach((path) => {
+      const parts = path.split(" > ");
+      for (let i = 1; i <= parts.length; i++) seen.add(parts.slice(0, i).join(" > "));
+    });
+    seen.forEach((c) => { counts[c] = (counts[c] || 0) + 1; });
+  });
+  return counts;
+}
+
+async function loadCategoryFilter() {
+  const saved = await loadData("category_filter", CATEGORY_FILE, null);
+  if (Array.isArray(saved)) return saved;
+  return (process.env.CATEGORY_FILTER || "").split("|").map((s) => s.trim()).filter(Boolean);
+}
+
+// Un producto pasa si alguna de sus categorías es una elegida o está adentro de una elegida.
+// Si la fuente no trae categorías (ningún producto las tiene), no se filtra nada.
+function makeCategoryMatcher(filter, products) {
+  if (!filter.length || !products.some((p) => (p.categories || []).length)) return () => true;
+  const wanted = filter.map(normCat);
+  return (p) => (p.categories || []).some((path) => {
+    const n = normCat(path);
+    return wanted.some((w) => n === w || n.startsWith(w + " > "));
+  });
+}
+
 let syncInFlight = null;
 
 async function syncProducts() {
@@ -385,6 +485,8 @@ async function getProducts(forceRefresh = false) {
       }
       await saveData("products_cache", CACHE_FILE, { v: CACHE_VERSION, ts: Date.now(), data: products });
       console.log(`✓ ${products.length} productos sincronizados`);
+      const counts = Object.entries(categoryCounts(products)).sort(([a], [b]) => a.localeCompare(b));
+      console.log(`Categorías (${counts.length}): ${counts.map(([c, n]) => `${c} (${n})`).join(" | ").slice(0, 3000)}`);
       return products;
     })().finally(() => { syncInFlight = null; });
   }
@@ -403,19 +505,21 @@ app.post("/api/auth/admin", (req, res) => {
 app.get("/api/products", async (req, res) => {
   try {
     const includeHidden = req.query.includeHidden === "1";
-    const [cache, prices, hidden, positions] = await Promise.all([
+    const [cache, prices, hidden, positions, catFilter] = await Promise.all([
       loadData("products_cache", CACHE_FILE, { ts: 0, data: [] }),
       loadData("prices", PRICES_FILE, {}),
       loadData("hidden_products", HIDDEN_FILE, []),
       loadData("positions", POSITIONS_FILE, {}),
+      loadCategoryFilter(),
     ]);
     const hiddenSet = new Set(hidden);
     const rank = { top: 0, bottom: 2 };
 
     // Orden: "Arriba" primero, "Normal" en el orden de Tiendanube, "Abajo" al final
-    const withExtras = (list) =>
-      list
-        .filter((p) => includeHidden || !hiddenSet.has(p.id))
+    const withExtras = (list) => {
+      const inCategory = makeCategoryMatcher(catFilter, list);
+      return list
+        .filter((p) => includeHidden || (!hiddenSet.has(p.id) && inCategory(p)))
         .map((p, i) => ({ p, i, r: rank[positions[p.id]] ?? 1 }))
         .sort((a, b) => a.r - b.r || a.i - b.i)
         .map(({ p }) => ({
@@ -423,7 +527,9 @@ app.get("/api/products", async (req, res) => {
           wholesalePrice: prices[p.id] ?? null,
           hidden: hiddenSet.has(p.id),
           position: positions[p.id] || "normal",
+          outOfCategory: !inCategory(p),
         }));
+    };
 
     const cached   = cache.data || [];
     const isStale  = cache.v !== CACHE_VERSION || Date.now() - (cache.ts || 0) >= CACHE_TTL_MS;
@@ -453,6 +559,26 @@ app.post("/api/hidden", async (req, res) => {
   if (password !== ADMIN_PASS) return res.status(401).json({ error: "Sin autorización" });
   if (!Array.isArray(hidden)) return res.status(400).json({ error: "Datos inválidos" });
   await saveData("hidden_products", HIDDEN_FILE, hidden.map(String));
+  res.json({ ok: true });
+});
+
+app.get("/api/categories", async (req, res) => {
+  const [cache, selected] = await Promise.all([
+    loadData("products_cache", CACHE_FILE, { ts: 0, data: [] }),
+    loadCategoryFilter(),
+  ]);
+  const counts = categoryCounts(cache.data || []);
+  res.json({
+    categories: Object.keys(counts).sort((a, b) => a.localeCompare(b)).map((path) => ({ path, count: counts[path] })),
+    selected,
+  });
+});
+
+app.post("/api/category-filter", async (req, res) => {
+  const { password, categories } = req.body;
+  if (password !== ADMIN_PASS) return res.status(401).json({ error: "Sin autorización" });
+  if (!Array.isArray(categories)) return res.status(400).json({ error: "Datos inválidos" });
+  await saveData("category_filter", CATEGORY_FILE, categories.map(String).filter(Boolean));
   res.json({ ok: true });
 });
 

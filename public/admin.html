@@ -168,6 +168,15 @@
     }
     .btn-small:hover:not(:disabled) { background: var(--dark); color: #fff; }
     .btn-small:disabled { opacity: .35; cursor: not-allowed; }
+
+    .cat-note { padding: 14px 20px 0; font-size: .74rem; color: var(--muted); line-height: 1.5; }
+    .cat-list { padding: 14px 20px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px 24px; align-items: start; }
+    .cat-group { border-left: 2px solid var(--border); padding-left: 12px; }
+    .cat-item { display: flex; align-items: center; gap: 8px; font-size: .8rem; cursor: pointer; padding: 4px 0; }
+    .cat-item input { width: 16px; height: 16px; accent-color: var(--green); cursor: pointer; }
+    .cat-item .cat-count { color: var(--muted); font-size: .7rem; }
+    .cat-item.child { padding-left: 22px; }
+    .cat-item.parent { font-weight: 700; }
     .prod-name {
       font-size: .88rem; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
       line-height: 1.3;
@@ -242,6 +251,19 @@
     </div>
   </div>
 
+  <!-- CATEGORÍAS -->
+  <div class="section-wrap">
+    <div class="section-header">
+      <h2>Categorías a mostrar</h2>
+      <button class="btn-main green" onclick="saveCategoryFilter()">✓ Guardar categorías</button>
+    </div>
+    <div class="cat-note">
+      Marcá las categorías de Tiendanube que querés en el catálogo mayorista. Marcar una categoría
+      principal incluye todas sus subcategorías. Si no marcás ninguna, se muestran todas.
+    </div>
+    <div class="cat-list" id="cat-list">Cargando categorías...</div>
+  </div>
+
   <!-- PRODUCTOS -->
   <div class="section-wrap">
     <div class="section-header">
@@ -303,6 +325,7 @@
       const cond = await condRes.json();
       renderGrid();
       loadConditions(cond);
+      loadCategories();
     } catch (e) {
       showStatus("Error al cargar datos: " + e.message, "err");
     }
@@ -341,8 +364,10 @@
 
     let priced = 0;
     let hidden = 0;
+    let outCat = 0;
     products.forEach(p => {
       if (hiddenIds.has(p.id)) hidden++;
+      else if (p.outOfCategory) outCat++;
       else if (prices[p.id]) priced++;
     });
 
@@ -357,10 +382,11 @@
     shown.forEach(p => {
       const wp        = prices[p.id];
       const isHidden  = hiddenIds.has(p.id);
+      const isOutCat  = !isHidden && p.outOfCategory;
       const pos       = positions[p.id] || "normal";
 
       const card = document.createElement("div");
-      card.className = `prod-card ${isHidden ? 'is-hidden' : ''}`;
+      card.className = `prod-card ${isHidden || isOutCat ? 'is-hidden' : ''}`;
       card.innerHTML = `
         <div class="prod-img">
           <img src="${p.image || ''}" alt="${p.name}" loading="lazy" />
@@ -368,6 +394,7 @@
             ${wp ? '✓ Con precio' : 'Sin precio'}
           </span>
           ${isHidden ? '<div class="prod-hidden-banner">Oculto del catálogo</div>' : ''}
+          ${isOutCat ? '<div class="prod-hidden-banner">Fuera de las categorías elegidas</div>' : ''}
         </div>
         <div class="prod-body">
           <div class="prod-name">${p.name}</div>
@@ -405,13 +432,80 @@
       grid.appendChild(card);
     });
 
-    const missing = (products.length - hidden) - priced;
+    const missing = (products.length - hidden - outCat) - priced;
     document.getElementById("stat-total").textContent   = products.length;
     document.getElementById("stat-priced").textContent  = priced;
     document.getElementById("stat-missing").textContent = missing;
     document.getElementById("stat-hidden").textContent  = hidden;
     document.getElementById("loading").style.display       = "none";
     document.getElementById("products-grid").style.display = "";
+  }
+
+  // ── CATEGORÍAS ──
+  async function loadCategories() {
+    const box = document.getElementById("cat-list");
+    try {
+      const data = await (await fetch("/api/categories")).json();
+      if (!data.categories.length) {
+        box.textContent = "Todavía no hay categorías: tocá \"Sincronizar productos\".";
+        return;
+      }
+      const selected = new Set(data.selected.map(norm));
+      box.innerHTML = "";
+      // Un bloque por categoría principal, con sus subcategorías debajo
+      const groups = {};
+      data.categories.forEach(c => {
+        const top = c.path.split(" > ")[0];
+        (groups[top] = groups[top] || []).push(c);
+      });
+      Object.values(groups).forEach(items => {
+        const group = document.createElement("div");
+        group.className = "cat-group";
+        items.forEach(c => group.appendChild(catCheckbox(c, data.categories, selected)));
+        box.appendChild(group);
+      });
+    } catch (e) {
+      box.textContent = "No se pudieron cargar las categorías: " + e.message;
+    }
+  }
+
+  function catCheckbox({ path, count }, all, selected) {
+    const depth = path.split(" > ").length - 1;
+    const isParent = all.some(c => c.path.startsWith(path + " > "));
+    const label = document.createElement("label");
+    label.className = `cat-item ${depth ? "child" : ""} ${isParent ? "parent" : ""}`;
+    label.style.paddingLeft = depth ? `${depth * 22}px` : "";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = path;
+    input.checked = selected.has(norm(path));
+    const name = document.createElement("span");
+    name.textContent = path.split(" > ").pop();
+    const cnt = document.createElement("span");
+    cnt.className = "cat-count";
+    cnt.textContent = `(${count})`;
+    label.append(input, name, cnt);
+    return label;
+  }
+
+  async function saveCategoryFilter() {
+    const categories = [...document.querySelectorAll("#cat-list input:checked")].map(i => i.value);
+    try {
+      const res = await fetch("/api/category-filter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: adminPassword, categories }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Error");
+      products = await (await fetch("/api/products?includeHidden=1")).json();
+      renderGrid();
+      const shown = products.filter(p => !p.hidden && !p.outOfCategory).length;
+      showStatus(categories.length
+        ? `✓ Categorías guardadas: se muestran ${shown} productos`
+        : `✓ Sin filtro de categorías: se muestran todos (${shown})`, "ok");
+    } catch (e) {
+      showStatus("Error al guardar categorías: " + e.message, "err");
+    }
   }
 
   // ── BÚSQUEDA Y ORDEN ──
@@ -509,7 +603,7 @@
   }
 
   function updateStats() {
-    const visible = products.filter(p => !hiddenIds.has(p.id));
+    const visible = products.filter(p => !hiddenIds.has(p.id) && !p.outOfCategory);
     const priced  = visible.filter(p => prices[p.id]).length;
     const missing = visible.length - priced;
     document.getElementById("stat-priced").textContent  = priced;
