@@ -418,6 +418,15 @@ async function scrapeAllProducts({ limit } = {}) {
 }
 
 // ── CACHE DE PRODUCTOS ─────────────────────────────────────────────────────────
+// Modo prueba: DEMO_PRODUCTS=N muestra solo N productos y les pone un precio
+// ficticio a los que no tienen precio cargado. No toca los precios guardados.
+function demo(list) {
+  const n = parseInt(process.env.DEMO_PRODUCTS || "0", 10);
+  if (!n) return list;
+  return list.filter((p) => !p.hidden && !p.outOfCategory).slice(0, n)
+    .map((p, i) => ({ ...p, wholesalePrice: p.wholesalePrice || 20000 + i * 1500 }));
+}
+
 // ── CATEGORÍAS ─────────────────────────────────────────────────────────────────
 const normCat = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 
@@ -537,7 +546,7 @@ app.get("/api/products", async (req, res) => {
 
     // Si hay datos en caché, los devolvemos INMEDIATAMENTE (aunque estén vencidos)
     if (!isEmpty) {
-      res.json(withExtras(cached));
+      res.json(demo(withExtras(cached)));
       // Si el caché está vencido, actualizamos en el fondo sin bloquear al cliente
       if (isStale) {
         getProducts(true).catch((e) => console.warn("Background sync failed:", e.message));
@@ -547,7 +556,7 @@ app.get("/api/products", async (req, res) => {
 
     // Solo si no hay nada en caché esperamos la sincronización (primer arranque)
     const products = await getProducts();
-    res.json(withExtras(products));
+    res.json(demo(withExtras(products)));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener productos" });
